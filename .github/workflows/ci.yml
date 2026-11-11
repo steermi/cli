@@ -33,7 +33,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          # Latest 1.27 patch: go.mod states the minimum, releases need current security fixes.
           go-version: "1.27.3"
           check-latest: true
       - run: make fmt vet tidy
@@ -55,7 +55,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          # Latest 1.27 patch: go.mod states the minimum, releases need current security fixes.
           go-version: "1.27.3"
           check-latest: true
       - name: Build release targets
@@ -73,7 +73,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          # Latest 1.27 patch: go.mod states the minimum, releases need current security fixes.
           go-version: "1.27.3"
           check-latest: true
       - run: make vuln
@@ -87,7 +87,7 @@ jobs:
           persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
-          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          # Latest 1.27 patch: go.mod states the minimum, releases need current security fixes.
           go-version: "1.27.3"
           check-latest: true
       - run: python3 scripts/check-repo.py .
