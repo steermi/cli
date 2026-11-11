@@ -1,0 +1,11 @@
+{
+  "name": "steermi",
+  "owner": { "name": "The Steermi Authors" },
+  "plugins": [
+    {
+      "name": "steermi",
+      "source": "./plugin/steermi",
+      "description": "Work on Steermi tasks in Claude Code with full context and a live session mirror. Requires the steermi CLI on PATH."
+    }
+  ]
+}

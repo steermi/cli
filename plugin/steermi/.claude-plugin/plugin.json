@@ -1,0 +1,9 @@
+{
+  "name": "steermi",
+  "version": "0.1.0",
+  "description": "Work on Steermi tasks in Claude Code: full task context, Steermi tools over MCP, and a live session mirror for your team.",
+  "author": { "name": "The Steermi Authors" },
+  "homepage": "https://github.com/steermi/cli",
+  "license": "Apache-2.0",
+  "keywords": ["steermi", "project-management", "mcp"]
+}

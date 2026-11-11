@@ -1,0 +1,72 @@
+name: release
+
+# A maintainer pushes a signed vX.Y.Z tag from main. The workflow verifies
+# the exact commit, builds every archive with GoReleaser into a DRAFT release,
+# attests build provenance and leaves publishing to a maintainer
+# (docs/releasing.md). Pull requests never reach this workflow.
+on:
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOWORK: "off"
+  GOTOOLCHAIN: local
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Tag must point at a commit on main
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          go-version: "1.27.3"
+          check-latest: true
+      - run: make check vuln
+      - run: python3 scripts/check-repo.py --release .
+
+  draft:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write       # create the draft release and upload assets
+      id-token: write       # sign provenance attestations
+      attestations: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          go-version: "1.27.3"
+          check-latest: true
+      - name: Install syft for SBOMs
+        run: go install github.com/anchore/syft/cmd/syft@v1.54.1
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/checksums.txt

@@ -1,0 +1,62 @@
+# yaml-language-server: $schema=https://goreleaser.com/static/schema.json
+# Release archives for verified platforms. CI builds them from a signed tag
+# into a draft release; a maintainer verifies and publishes it
+# (docs/releasing.md). Local rehearsal: make snapshot.
+version: 2
+
+project_name: steermi
+
+env:
+  - GOWORK=off
+  - CGO_ENABLED=0
+
+before:
+  hooks:
+    - go mod verify
+    # Full license texts of every linked module ship in each archive.
+    - go run github.com/google/go-licenses/v2@v2.0.1 save ./cmd/steermi --save_path=build/licenses --force --ignore github.com/steermi
+
+builds:
+  - id: steermi
+    main: ./cmd/steermi
+    binary: steermi
+    flags: [-trimpath]
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    ldflags:
+      - -s -w
+      - -X github.com/steermi/cli/internal/buildinfo.version={{ .Version }}
+      - -X github.com/steermi/cli/internal/buildinfo.commit={{ .FullCommit }}
+      - -X github.com/steermi/cli/internal/buildinfo.date={{ .CommitDate }}
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    # steermi_0.2.0_Darwin_arm64.tar.gz, matching `uname -s`/`uname -m`.
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ title .Os }}_{{ if eq .Arch "amd64" }}x86_64{{ else }}{{ .Arch }}{{ end }}
+    files:
+      - LICENSE
+      - NOTICE
+      - THIRD_PARTY_NOTICES.md
+      - README.md
+      - CHANGELOG.md
+      - src: build/licenses/**/*
+        dst: licenses
+
+checksum:
+  name_template: checksums.txt
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  disable: true
+
+release:
+  draft: true
+  replace_existing_draft: true
+  prerelease: auto
+  footer: |
+    Verify: `sha256sum --check --ignore-missing checksums.txt` and
+    `gh attestation verify <archive> --repo steermi/cli`.

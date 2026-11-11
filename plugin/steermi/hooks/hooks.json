@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [{ "type": "command", "command": "steermi hook flush", "timeout": 30 }] }
+    ],
+    "PostToolUse": [
+      { "matcher": "TodoWrite", "hooks": [{ "type": "command", "command": "steermi hook flush", "timeout": 30 }] }
+    ],
+    "SessionEnd": [
+      { "hooks": [{ "type": "command", "command": "steermi hook session-end", "timeout": 30 }] }
+    ]
+  }
+}

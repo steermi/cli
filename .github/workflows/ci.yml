@@ -1,0 +1,94 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+# Pull requests from forks run with a read-only token and no secrets.
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GOWORK: "off"
+  GOTOOLCHAIN: local
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        # Runtime-verified platforms. Other release targets are build-tested.
+        os: [ubuntu-latest, ubuntu-24.04-arm, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          go-version: "1.27.3"
+          check-latest: true
+      - run: make fmt vet tidy
+      - run: make test race
+      - name: Smoke test the binary
+        run: |
+          make build
+          ./bin/steermi version
+          ./bin/steermi --help >/dev/null
+          ./bin/steermi work --help 2>/dev/null
+
+  build:
+    name: cross-compile
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          go-version: "1.27.3"
+          check-latest: true
+      - name: Build release targets
+        run: |
+          for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            GOOS=${target%/*} GOARCH=${target#*/} CGO_ENABLED=0 go build -o /dev/null ./cmd/steermi
+          done
+
+  vuln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          go-version: "1.27.3"
+          check-latest: true
+      - run: make vuln
+
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # Latest 1.26 patch: go.mod states the minimum, releases need current security fixes.
+          go-version: "1.27.3"
+          check-latest: true
+      - run: python3 scripts/check-repo.py .
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
