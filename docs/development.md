@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Go 1.27.3 or newer, `git`, Python 3 (documentation check only).
+- Go 1.27.4 or newer, `git`, Python 3 (documentation check only).
 - macOS or Linux. Windows builds compile but are not supported yet.
 - No Steermi account or Claude credentials: tests use temporary homes, fake
   binaries and a fixture gateway.

@@ -55,10 +55,9 @@ plugin), `.claude-plugin/marketplace.json` (marketplace entry pointing at
 ## Local development
 
 `../go.work` (outside every repository, never committed) links `cli` and
-`agent-contracts`; it also maps the not-yet-published
-`agent-contracts v0.1.0` to the checkout. `make` targets set `GOWORK=off`
-like CI, so they only work once that version is published; until then run
-`go` directly (it finds `../go.work`), e.g. `go test ./... -count=1`. Try commands against
+`agent-contracts` so plain `go` builds against the checkout. `make` targets
+set `GOWORK=off` like CI and build against the published `agent-contracts`
+version in `go.mod`. Try commands against
 `go run ./internal/fixture/server` (pairing code `stp_fixture`).
 
 ## Checks
