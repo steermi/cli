@@ -22,7 +22,7 @@ Supported platforms: macOS and Linux (amd64, arm64).
 
 ## Install
 
-With Go 1.27.3 or newer:
+With Go 1.27.4 or newer:
 
 ```bash
 go install github.com/steermi/cli/cmd/steermi@latest

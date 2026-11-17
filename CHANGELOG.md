@@ -6,6 +6,11 @@ All notable changes to the steermi CLI are listed here. The format follows
 
 ## Unreleased
 
+### Changed
+
+- Go 1.27.4 or newer is required.
+- `github.com/steermi/agent-contracts` v0.2.0.
+
 ## [0.1.0] - 2026-11-11
 
 First public release.
