@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v1.5.0
-	github.com/steermi/agent-contracts v0.2.0
+	github.com/steermi/agent-contracts v0.3.1
 	github.com/stretchr/testify v1.12.1
 	github.com/yuin/goldmark v1.8.7
 	golang.org/x/sys v0.50.0
@@ -17,5 +17,5 @@ require (
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/yosida95/uritemplate/v3 v3.0.2 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )
