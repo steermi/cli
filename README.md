@@ -81,7 +81,14 @@ Flags: `--profile NAME`, `--agent claude|codex|copilot|opencode`,
 `--model ID`, `--effort low|medium|high`, `--yes` (skip the card prompt),
 `--no-agent` (only prepare the checkout), `--background` (headless; Claude
 Code uses `acceptEdits`, Codex `--sandbox workspace-write`, Copilot
-`--allow-tool write`, each plus `allowed_tools` from `.steermi/runner.yaml`).
+`--allow-tool write`, each plus `allowed_tools` from `.steermi/runner.yaml`),
+`--pause-after-step` (the flow waits for you after each step instead of
+continuing by itself).
+When the run is part of a flow loop, the CLI first says what Zoe will do, for
+example "Zoe will run Build → Review automatically · max 3 rounds · no new
+round after $20". The budget is checked when a round starts, so a round in
+progress may end above it. If Steermi cannot record `--pause-after-step`
+(the run's flow does not continue after it), the CLI says so.
 Skills that hand back an answer or findings (such as the built-in Plan and
 Review) always run read-only; only code skills may edit.
 
@@ -132,6 +139,16 @@ steermi done             # push the branch, open the MR, post the summary, close
 steermi done --commit    # commit leftovers first
 steermi handoff          # push WIP and continue the session in Steermi (cloud)
 ```
+
+`steermi done` then says what the flow does next: "Review starts in Steermi:
+<link>" when the next step continues by itself in the cloud, or the work
+item link when it waits for you (starting it there continues the same flow and
+shows the `steermi run lx_…` command for your machine; once Steermi has
+created that launch, `done` prints the command itself), with the reason when
+an automatic step paused (for example "Paused: no AI key for Steermi runs")
+or the loop stopped.
+It watches an automatic step for up to five seconds, so `done` can take that
+long to return.
 
 The ticket moves to *In review* through the merge request webhook. Finishing
 a launch is not acceptance: a teammate still reviews and accepts the work in

@@ -35,6 +35,9 @@ type RunOptions struct {
 	// NoAgent only prepares the checkout (branch + TASK.md).
 	NoAgent    bool
 	Background bool
+	// PauseAfterStep asks the flow to wait for a person after each step
+	// (step mode ask) instead of continuing by itself.
+	PauseAfterStep bool
 	// Agent picks the agent, profile and model (see AgentFlags).
 	Agent AgentFlags
 	Cwd   string
@@ -64,7 +67,7 @@ func Run(ctx context.Context, o RunOptions) error {
 		return err
 	}
 	fmt.Fprintf(o.Out, "Claiming %s…\n", o.PublicID)
-	bundle, err := client.Claim(ctx, o.PublicID)
+	bundle, err := client.Claim(ctx, o.PublicID, o.stepMode())
 	if err != nil {
 		return friendlyClaimError(err)
 	}
@@ -101,12 +104,21 @@ func Run(ctx context.Context, o RunOptions) error {
 	if bundle.Launch.ActivityRunID == "" || bundle.Launch.InputDigest == "" || bundle.Launch.ActivityGeneration < 1 {
 		return errors.New("launch has no canonical activity binding")
 	}
-	var bound activity.Run
+	var bound runView
 	if err := client.Do(ctx, http.MethodGet, "/ai/activities/"+bundle.Launch.ActivityRunID, nil, &bound, api.TokenAuth(bundle.LaunchToken)); err != nil {
 		return err
 	}
 	if bound.ID != bundle.Launch.ActivityRunID || bound.InputDigest != bundle.Launch.InputDigest || bound.Generation != bundle.Launch.ActivityGeneration {
 		return errors.New("activity binding changed; resume from Steermi")
+	}
+	// What the flow does after this step, before anything is prepared or
+	// the agent starts (the device cannot read the run before the claim,
+	// which records --pause-after-step on it).
+	if line := consentLine(bundle.Loop, bound.StepMode); line != "" {
+		fmt.Fprintln(o.Out, line)
+	}
+	if line := o.stepModeRefused(bound.StepMode); line != "" {
+		fmt.Fprintln(o.Out, line)
 	}
 	pin := ""
 	for _, ref := range bound.Inputs {
@@ -236,6 +248,26 @@ func Run(ctx context.Context, o RunOptions) error {
 		return err
 	}
 	return runAgent(ctx, client, state, sel.adapter, bin, cmd, dir, mode, o)
+}
+
+// stepMode is the step mode the claim asks for: ask with
+// --pause-after-step, else the run's own.
+func (o RunOptions) stepMode() activity.StepMode {
+	if o.PauseAfterStep {
+		return activity.StepModeAsk
+	}
+	return ""
+}
+
+// stepModeRefused words a --pause-after-step the claim could not record:
+// Steermi applies it only while the run's flow can still continue (its
+// guard decides), so the run read after the claim may keep its own mode.
+func (o RunOptions) stepModeRefused(got activity.StepMode) string {
+	want := o.stepMode()
+	if want == "" || got.OrDefault() == want.OrDefault() {
+		return ""
+	}
+	return "Note: --pause-after-step was not applied (Steermi records it only on a run whose flow can still continue); this run keeps its step mode."
 }
 
 func friendlyClaimError(err error) error {

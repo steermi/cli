@@ -46,6 +46,7 @@ Usage:
   steermi work KEY [--skill ID] [RUN FLAGS]
   steermi run LAUNCH_ID [RUN FLAGS]
   steermi done [--summary TEXT] [--commit] [--no-mr]
+                           finish; says the next step (waits up to 5 s for an automatic one)
   steermi handoff [--summary TEXT]
   steermi profile list|add|use|rm|follow|path
   steermi repos link [PATH] | steermi repos list
@@ -61,6 +62,9 @@ Run flags:
   --here           use the current checkout instead of a new worktree
   --no-agent       only prepare the checkout
   --background     run the agent headless and follow it in Steermi
+  --pause-after-step
+                   the flow waits for you after each step instead of
+                   continuing by itself (Build → Review)
 
 Run steermi COMMAND --help for a command's flags. STEERMI_URL selects the
 Steermi installation, STEERMI_CONFIG_DIR the configuration directory,
@@ -414,9 +418,10 @@ func runFlags(name string, w io.Writer) (*flag.FlagSet, func() launch.RunOptions
 	model := fs.String("model", "", "model for this run")
 	effort := fs.String("effort", "", "low, medium or high")
 	yes := fs.Bool("yes", false, "start without the launch card prompt")
+	pause := fs.Bool("pause-after-step", false, "the flow waits for you after each step instead of continuing by itself")
 	return fs, func() launch.RunOptions {
 		return launch.RunOptions{
-			Here: *here, NoAgent: *noAgent, Background: *background,
+			Here: *here, NoAgent: *noAgent, Background: *background, PauseAfterStep: *pause,
 			Agent: launch.AgentFlags{Profile: *prof, Agent: *agentName, Model: *model, Effort: *effort, Yes: *yes},
 		}
 	}

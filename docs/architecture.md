@@ -88,6 +88,19 @@ model, effort}`; Steermi stores it in the launch result as self-reported.
    commits. The runner (answer, code, findings) follows from what the skill
    hands back.
    `steermi handoff` stops and leaves a note for an explicit continuation.
+7. After finishing, `steermi done` reads its own run with the launch token
+   (the one read Steermi still admits for a finished launch) and words the
+   pinned flow hop: an automatic hop pinned to the cloud (`Run.AutoHop`)
+   starts in Steermi; `auto_paused_reason` names why it did not; a hop pinned
+   `local` or an ask hop prints the work item link, where starting the step
+   continues the same flow (never a new, unrelated run). A stopped loop is
+   worded first; the run's `successor` is "started" only while ready or
+   running, a waiting local successor prints `steermi run <launch_public_id>`,
+   and other successor states leave the wording to the hop. `--pause-after-step`
+   sends `step_mode: ask` once, on the claim; the consent line comes from the
+   claim's loop summary (`loop`: steps, max rounds, budget, `advance`, the
+   same facts `GET /v1/flows/work-item` reports) and prints before the
+   checkout is prepared. `done` watches an automatic hop for up to 5 s.
 
 Every launch is bound to an activity run, its input digest and a generation.
 Taking a run local or back to the cloud starts a new generation, which fences

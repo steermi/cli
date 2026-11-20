@@ -6,10 +6,41 @@ All notable changes to the steermi CLI are listed here. The format follows
 
 ## Unreleased
 
+### Added
+
+- `--pause-after-step` on `work`, `run` and `next`: asks Steermi to pause the
+  flow after each step (`step_mode: ask`, sent once, on the claim). Before
+  the checkout is prepared and the agent starts, the CLI prints what Zoe
+  will do in a flow loop ("Zoe will run Build → Review automatically · max 3
+  rounds · no new round after $20"). The line comes from the loop summary
+  Steermi sends in the claim (`loop`: steps, rounds, budget, advance); the
+  CLI never derives it from the run's hops. When Steermi cannot record the
+  pause (the run's flow does not continue), the CLI prints one line saying
+  so instead of ignoring the flag.
+- `steermi done` names what follows (it waits up to five seconds for an
+  automatic step): "Review starts in Steermi: <link>" for
+  an automatic cloud step, the reason when it paused (for example "Paused: no
+  AI key for Steermi runs"), or, for a step a person starts or one that runs
+  on this machine, the work item link: starting it there continues the same
+  flow (its loop and its step's skill) and gives the `steermi run` command.
+  A stopped loop is reported before any successor; a successor is "started"
+  only while it is ready or running; a local successor waiting for this
+  machine prints `steermi run lx_…` from its `launch_public_id`; a suggested
+  one waits for a person to confirm it.
+  The CLI never suggests `steermi work` for a next step, which would start
+  an unrelated run.
+- `steermi_complete_task` checks `activity_result.outputs` with the
+  contract (`OutputRef.Normalize`): a short commit SHA is refused to the
+  agent right away, naming the field.
+
 ### Changed
 
 - Go 1.27.4 or newer is required.
-- `github.com/steermi/agent-contracts` v0.2.0.
+- Requires `github.com/steermi/agent-contracts` v0.3.0 (unreleased: step
+  modes, hop locations, `auto_paused_reason`); `go.mod` still pins v0.2.0
+  until v0.3.0 is tagged. Needs Steermi with the flow run UX release.
+- The launch claim always sends a JSON body (`{}` without
+  `--pause-after-step`); Steermi requires it.
 
 ## [0.1.0] - 2026-11-11
 

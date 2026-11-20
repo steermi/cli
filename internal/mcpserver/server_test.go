@@ -158,3 +158,29 @@ func TestProjectPlanningReadsExplicitSelectedWorkItem(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "/work_items/selected-item", f.calls[0].path)
 }
+
+func TestNormalizeActivityResult(t *testing.T) {
+	sha := "ABCDEF0123456789ABCDEF0123456789ABCDEF01"
+	got, err := normalizeActivityResult(`{"assumptions":["a"],"outputs":[{"kind":"repository","repository_id":"repo-1","commit_sha":"` + sha + `"}]}`)
+	require.NoError(t, err)
+	var result struct {
+		Assumptions []string `json:"assumptions"`
+		Outputs     []struct {
+			ResourceID string `json:"resource_id"`
+			CommitSHA  string `json:"commit_sha"`
+		} `json:"outputs"`
+	}
+	require.NoError(t, json.Unmarshal([]byte(got), &result))
+	assert.Equal(t, []string{"a"}, result.Assumptions)
+	assert.Equal(t, "repo-1", result.Outputs[0].ResourceID)
+	assert.Equal(t, "abcdef0123456789abcdef0123456789abcdef01", result.Outputs[0].CommitSHA)
+
+	_, err = normalizeActivityResult(`{"outputs":[{"kind":"repository","repository_id":"repo-1","commit_sha":"abc1234"}]}`)
+	assert.ErrorContains(t, err, "activity_result.outputs[0].commit_sha")
+	_, err = normalizeActivityResult(`[1]`)
+	assert.Error(t, err)
+	findings := `{"findings":[],"recommendation":"approve"}`
+	got, err = normalizeActivityResult(findings)
+	require.NoError(t, err)
+	assert.Equal(t, findings, got, "results without outputs are saved as written")
+}

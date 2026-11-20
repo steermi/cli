@@ -135,7 +135,11 @@ func Done(ctx context.Context, o DoneOptions) error {
 		_ = json.Unmarshal(saved, &result)
 	}
 	if st.RepositoryID != "" {
-		result["outputs"] = []map[string]string{{"kind": "repository", "resource_id": st.RepositoryID, "repository_id": st.RepositoryID, "commit_sha": sha}}
+		out := activity.OutputRef{Kind: activity.RefRepository, RepositoryID: st.RepositoryID, CommitSHA: sha}
+		if err := out.Normalize(); err != nil {
+			return fmt.Errorf("pin the pushed commit: %w", err)
+		}
+		result["outputs"] = []activity.OutputRef{out}
 	}
 	if err := a.Do(ctx, http.MethodPost, "/ai/local-launches/"+url.PathEscape(st.LaunchID)+"/finish", map[string]any{
 		"state": "completed", "summary": summary, "mr_url": mrURL, "commits": commits, "activity_result": result, "runner": runnerReport(st),
@@ -152,49 +156,6 @@ func Done(ctx context.Context, o DoneOptions) error {
 	}
 	fmt.Fprintln(o.Out, nextStep(ctx, a))
 	return nil
-}
-
-// nextStepHint explains what follows a submission when the run cannot be
-// read: the delivery flow's next step is offered on the work item.
-const nextStepHint = "Next: the work item's delivery flow offers the next step (for example Review). Automatic steps run in the cloud; to run the next step here, start it with `steermi work` or hand it to the cloud from the work item."
-
-// nextStep reads the submitted run and names the step its pinned delivery
-// flow hop leads to; the generic hint when the run cannot be read.
-func nextStep(ctx context.Context, a *Active) string {
-	var r activity.Run
-	if a.State.ActivityRunID == "" || a.Do(ctx, http.MethodGet, "/ai/activities/"+url.PathEscape(a.State.ActivityRunID), nil, &r) != nil {
-		return nextStepHint
-	}
-	return describeNext(r)
-}
-
-// describeNext words a run's flow hop. Steps set to start automatically run
-// in the cloud only: a local run never chains on this machine.
-func describeNext(r activity.Run) string {
-	hop, stop, ok := r.FlowNext()
-	if !ok {
-		return nextStepHint
-	}
-	statuses := ""
-	if len(hop.Statuses) > 0 {
-		names := make([]string, len(hop.Statuses))
-		for i, s := range hop.Statuses {
-			names[i] = strings.ReplaceAll(s.Category, "_", " ")
-		}
-		statuses = " The item moves to " + strings.Join(names, ", then ") + "."
-	}
-	step := hop.Name
-	switch {
-	case stop != "":
-		return fmt.Sprintf("Next: the quality loop stopped (%s); a person decides on the work item.%s", strings.ReplaceAll(string(stop), "_", " "), statuses)
-	case step != "" && hop.Auto:
-		return fmt.Sprintf("Next: %s starts automatically in the cloud (automatic steps never chain on this machine); to run it here instead, start it with `steermi work`.%s", step, statuses)
-	case step != "":
-		return fmt.Sprintf("Next: %s. Start it from the work item, or here with `steermi work`.%s", step, statuses)
-	case hop.Approval:
-		return "Next: a person decides on the work item." + statuses
-	}
-	return "Next: the delivery flow ends here." + statuses
 }
 
 // HandoffOptions control `steermi handoff`.

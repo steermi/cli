@@ -65,6 +65,21 @@ type Bundle struct {
 	ModelHint *hint.Hint `json:"model_hint,omitempty"`
 	// SkillName is the run's skill as people see it.
 	SkillName string `json:"skill_name"`
+	// Loop is the loop the run's step belongs to, as Steermi reports it;
+	// nil outside a loop. The CLI prints it as the consent line.
+	Loop *FlowLoop `json:"loop,omitempty"`
+}
+
+// FlowLoop summarizes a flow loop for its consent line: its steps in
+// order, its round limit, its budget (checked when a round starts) and
+// whether it advances between steps by itself; ReviewStep names the step
+// whose clean findings end the loop ("" when it has none).
+type FlowLoop struct {
+	Steps         []string             `json:"steps"`
+	MaxIterations int                  `json:"max_iterations"`
+	BudgetUSD     float64              `json:"budget_usd"`
+	Advance       activity.LoopAdvance `json:"advance"`
+	ReviewStep    string               `json:"review_step"`
 }
 
 // Repository is a connected git repository.
@@ -156,10 +171,16 @@ func (c *Client) CreateLaunch(ctx context.Context, req CreateLaunchRequest) (*La
 	return out.Launch, nil
 }
 
-// Claim claims a launch and returns its bundle.
-func (c *Client) Claim(ctx context.Context, publicID string) (*Bundle, error) {
+// Claim claims a launch and returns its bundle. It is the one place a
+// launch records the developer's step mode (`steermi run`, `work` and
+// `next` all claim): ask pauses the flow after each step; empty leaves the
+// run's step mode alone. The body is always sent (the gateway requires it).
+func (c *Client) Claim(ctx context.Context, publicID string, stepMode activity.StepMode) (*Bundle, error) {
 	var out Bundle
-	err := c.Do(ctx, http.MethodPost, "/ai/local-launches/"+url.PathEscape(publicID)+"/claim", map[string]string{}, &out, DeviceAuth)
+	body := struct {
+		StepMode activity.StepMode `json:"step_mode,omitempty"`
+	}{stepMode}
+	err := c.Do(ctx, http.MethodPost, "/ai/local-launches/"+url.PathEscape(publicID)+"/claim", body, &out, DeviceAuth)
 	return &out, err
 }
 

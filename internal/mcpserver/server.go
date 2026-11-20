@@ -233,10 +233,11 @@ func coreTools() []Tool {
 					return "", errors.New("summary is required")
 				}
 				if raw := str(args, "activity_result"); raw != "" && l.SaveResult != nil {
-					if !json.Valid([]byte(raw)) {
-						return "", errors.New("activity_result must be JSON")
+					normalized, err := normalizeActivityResult(raw)
+					if err != nil {
+						return "", err
 					}
-					if err := l.SaveResult(raw); err != nil {
+					if err := l.SaveResult(normalized); err != nil {
 						return "", err
 					}
 				}
@@ -249,6 +250,38 @@ func coreTools() []Tool {
 			},
 		},
 	}
+}
+
+// normalizeActivityResult checks an agent's activity_result before it is
+// saved: valid JSON, and outputs completed and checked by the contract
+// (activity.OutputRef.Normalize: a repository output pins a full commit
+// SHA), so the agent fixes its call now instead of the run being refused
+// at /steermi:done.
+func normalizeActivityResult(raw string) (string, error) {
+	var result map[string]json.RawMessage
+	if json.Unmarshal([]byte(raw), &result) != nil {
+		return "", errors.New("activity_result must be a JSON object")
+	}
+	rawOutputs, ok := result["outputs"]
+	if !ok {
+		return raw, nil
+	}
+	var outputs []activity.OutputRef
+	if json.Unmarshal(rawOutputs, &outputs) != nil {
+		return "", errors.New("activity_result.outputs must be a list of outputs")
+	}
+	for i := range outputs {
+		if err := outputs[i].Normalize(); err != nil {
+			return "", fmt.Errorf("activity_result.outputs[%d].%w", i, err)
+		}
+	}
+	b, err := json.Marshal(outputs)
+	if err != nil {
+		return "", err
+	}
+	result["outputs"] = b
+	out, err := json.Marshal(result)
+	return string(out), err
 }
 
 func orDefault(s, def string) string {

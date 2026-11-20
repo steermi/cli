@@ -4,11 +4,17 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,10 +71,11 @@ func reply(w http.ResponseWriter, data any) {
 
 func (g *fakeGateway) handler(t *testing.T) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		g.record(r)
+		body := g.record(r)
 		switch {
 		case r.Method == http.MethodPost && r.URL.Path == "/v1/ai/local-launches/lx_7Q4XK2M9ab/claim":
 			assert.Equal(t, "Bearer device-token", r.Header.Get("Authorization"))
+			assert.NotNil(t, body, "the claim always sends its body")
 			reply(w, map[string]any{
 				"launch": map[string]any{
 					"id": "launch-1", "public_id": "lx_7Q4XK2M9ab", "project_id": "p1", "work_item_id": "wi-1",
@@ -343,21 +350,254 @@ func TestHandoffAnswerAndFindingsLeaveDirtyFilesUncommitted(t *testing.T) {
 }
 
 func TestDescribeNextFollowsThePinnedHop(t *testing.T) {
-	run := func(hops map[activity.Outcome]activity.FlowHop) activity.Run {
-		return activity.Run{Runner: activity.Code, State: activity.Submitted, Flow: &activity.FlowRef{VersionID: "v", Node: "build", Hops: hops}}
+	const link = "https://steermi.test/work-items/key/STE-1"
+	run := func(hops map[activity.Outcome]activity.FlowHop) runView {
+		return runView{Run: activity.Run{Runner: activity.Code, State: activity.Submitted, Flow: &activity.FlowRef{VersionID: "v", Node: "build", Hops: hops}}}
 	}
-	auto := describeNext(run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: {Node: "qa_check", Name: "Security audit", Runner: activity.Findings, Auto: true}}))
-	if !strings.Contains(auto, "Security audit starts automatically in the cloud") {
-		t.Fatalf("auto hop: %q", auto)
+	review := activity.FlowHop{Node: "review", Name: "Review", Runner: activity.Findings, Auto: true, Location: activity.Cloud}
+
+	auto := describeNext(run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: review}), link)
+	assert.Equal(t, "Review starts in Steermi: "+link, auto)
+
+	paused := run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: review})
+	reason := activity.PausedNoProviderKey
+	paused.AutoPausedReason = &reason
+	assert.Equal(t, "Paused: no AI key for Steermi runs. Next: Review — start it from the work item ("+link+"), in the cloud or on this machine.", describeNext(paused, link))
+
+	stepped := run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: review})
+	stepped.StepMode = activity.StepModeAsk
+	assert.Contains(t, describeNext(stepped, link), "Paused after this step")
+
+	local := describeNext(run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: {Node: "build", Name: "Build", Runner: activity.Code, Location: activity.Local}}), link)
+	assert.Equal(t, "Next: Build runs on this machine: start it from the work item ("+link+") for its `steermi run` command.", local)
+
+	ask := describeNext(run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: {Node: "review", Name: "Review", Runner: activity.Findings, Statuses: []activity.StatusTarget{{Category: "in_review"}}}}), "")
+	assert.Equal(t, "Next: Review — start it from the work item, in the cloud or on this machine. The item moves to in review.", ask)
+	assert.NotContains(t, ask, "steermi work", "never a new run beside the flow")
+
+	unresolved := describeNext(run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: {Node: "review", Name: "Review", Runner: activity.Findings, Auto: true}}), "")
+	assert.Contains(t, unresolved, "Next: Review — start it", "a hop without a pinned location never starts by itself")
+
+	assert.Equal(t, "Next: the delivery flow ends here.", describeNext(run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: {Stop: "end"}}), link))
+	assert.Equal(t, nextStepHint, describeNext(runView{Run: activity.Run{Runner: activity.Code, State: activity.Submitted}}, link))
+}
+
+func TestConsentLineNamesTheLoop(t *testing.T) {
+	loop := &api.FlowLoop{Steps: []string{"Build", "Review"}, MaxIterations: 3, BudgetUSD: 20, Advance: activity.LoopAdvanceAuto}
+	assert.Equal(t, "Zoe will run Build → Review automatically · max 3 rounds · no new round after $20", consentLine(loop, ""))
+
+	loop.BudgetUSD = 7.5
+	assert.Equal(t, "Zoe will run Build → Review, pausing after each step · max 3 rounds · no new round after $7.50",
+		consentLine(loop, activity.StepModeAsk), "the claim recorded --pause-after-step")
+
+	asks := &api.FlowLoop{Steps: []string{"Build", "Review"}, MaxIterations: 2, Advance: activity.LoopAdvanceAsk}
+	assert.Equal(t, "Zoe will run Build → Review, pausing after each step · max 2 rounds", consentLine(asks, ""))
+
+	reviewed := &api.FlowLoop{Steps: []string{"Build", "Security audit"}, MaxIterations: 3, Advance: activity.LoopAdvanceAuto, ReviewStep: "Security audit"}
+	assert.Equal(t, "Zoe will run Build → Security audit automatically until Security audit is clean · max 3 rounds", consentLine(reviewed, ""),
+		"the server names the loop's findings step")
+	assert.Empty(t, consentLine(nil, ""), "no loop, no line")
+	assert.Empty(t, consentLine(&api.FlowLoop{}, ""))
+}
+
+// done watches an automatic next step briefly and reports why it paused.
+func TestNextStepWatchesTheAutomaticHop(t *testing.T) {
+	prevFor, prevEvery := pausePollFor, pausePollEvery
+	pausePollFor, pausePollEvery = 2*time.Second, 10*time.Millisecond
+	t.Cleanup(func() { pausePollFor, pausePollEvery = prevFor, prevEvery })
+
+	var mu sync.Mutex
+	reads := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "/v1/ai/activities/run-1", r.URL.Path)
+		assert.Equal(t, "Bearer launch-token", r.Header.Get("Authorization"), "a finished launch reads its own run")
+		mu.Lock()
+		reads++
+		n := reads
+		mu.Unlock()
+		view := map[string]any{"id": "run-1", "runner": "code", "state": "submitted", "skill_name": "Build", "auto_paused_reason": nil,
+			"flow": map[string]any{"version_id": "system:2", "node": "build", "hops": map[string]any{"done": map[string]any{"node": "review", "name": "Review", "runner": "findings", "auto": true, "location": "cloud"}}}}
+		if n >= 3 {
+			view["auto_paused_reason"] = "no_provider_key"
+		}
+		reply(w, view)
+	}))
+	defer srv.Close()
+	a := &Active{
+		State:  &config.LaunchState{ActivityRunID: "run-1", Identifier: "STE-1", LaunchToken: "launch-token", TokenExpiry: time.Now().Add(time.Hour)},
+		Client: api.New(srv.URL), Now: time.Now,
 	}
-	ask := describeNext(run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: {Node: "review", Name: "Review", Runner: activity.Findings, Statuses: []activity.StatusTarget{{Category: "in_review"}}}}))
-	if !strings.Contains(ask, "Next: Review. Start it from the work item") || !strings.Contains(ask, "moves to in review") {
-		t.Fatalf("ask hop: %q", ask)
+	got := nextStep(context.Background(), a)
+	assert.Equal(t, "Paused: no AI key for Steermi runs. Next: Review — start it from the work item ("+srv.URL+"/work-items/key/STE-1), in the cloud or on this machine.", got)
+	assert.Equal(t, 3, reads)
+
+	// Nothing paused within the window: the step starts in Steermi.
+	pausePollFor = 30 * time.Millisecond
+	mu.Lock()
+	reads = -100
+	mu.Unlock()
+	assert.Equal(t, "Review starts in Steermi: "+srv.URL+"/work-items/key/STE-1", nextStep(context.Background(), a))
+}
+
+// --pause-after-step asks for step mode ask once, on the claim (create
+// sends none).
+func TestPauseAfterStepSendsStepMode(t *testing.T) {
+	assert.Equal(t, activity.StepModeAsk, RunOptions{PauseAfterStep: true}.stepMode())
+	assert.Empty(t, RunOptions{}.stepMode())
+	var body map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body = nil
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		reply(w, map[string]any{})
+	}))
+	defer srv.Close()
+	c := api.FromCredentials(&config.Credentials{URL: srv.URL, AccessToken: "device-token", AccessExpiry: time.Now().Add(time.Hour)})
+	_, err := c.Claim(context.Background(), "lx_7Q4XK2M9ab", activity.StepModeAsk)
+	require.NoError(t, err)
+	assert.Equal(t, "ask", body["step_mode"])
+	_, err = c.Claim(context.Background(), "lx_7Q4XK2M9ab", "")
+	require.NoError(t, err)
+	assert.NotContains(t, body, "step_mode")
+	_, err = c.CreateLaunch(context.Background(), api.CreateLaunchRequest{WorkItemIdentifier: "STE-1"})
+	require.NoError(t, err)
+	assert.NotContains(t, body, "step_mode")
+}
+
+// Once the server reports the run's successor, done names it and links its
+// live session instead of waiting out the poll.
+func TestNextStepNamesTheSuccessor(t *testing.T) {
+	prevFor, prevEvery := pausePollFor, pausePollEvery
+	pausePollFor, pausePollEvery = 2*time.Second, 10*time.Millisecond
+	t.Cleanup(func() { pausePollFor, pausePollEvery = prevFor, prevEvery })
+
+	var mu sync.Mutex
+	reads := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		reads++
+		n := reads
+		mu.Unlock()
+		view := map[string]any{"id": "run-1", "project_id": "p1", "runner": "code", "state": "submitted", "skill_name": "Build", "auto_paused_reason": nil, "successor": nil,
+			"flow": map[string]any{"version_id": "system:2", "node": "build", "hops": map[string]any{"done": map[string]any{"node": "review", "name": "Review", "runner": "findings", "auto": true, "location": "cloud"}}}}
+		if n >= 2 {
+			view["successor"] = map[string]any{"id": "run-2", "runner": "findings", "skill_name": "Review", "state": "running", "execution_location": "cloud", "session_id": "s2"}
+		}
+		reply(w, view)
+	}))
+	defer srv.Close()
+	a := &Active{
+		State:  &config.LaunchState{ActivityRunID: "run-1", Identifier: "STE-1", LaunchToken: "launch-token", TokenExpiry: time.Now().Add(time.Hour)},
+		Client: api.New(srv.URL), Now: time.Now,
 	}
-	if got := describeNext(run(map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: {Stop: "end"}})); got != "Next: the delivery flow ends here." {
-		t.Fatalf("end: %q", got)
+	assert.Equal(t, "Review started in Steermi: "+srv.URL+"/projects/p1/chat/s2", nextStep(context.Background(), a))
+	assert.Equal(t, 2, reads, "the poll stops once the successor exists")
+
+	local := runView{DisplayName: "Review", Successor: &runSuccessor{ID: "run-3", Runner: activity.Code, SkillName: "Build", State: activity.Ready, ExecutionLocation: activity.Local, LaunchPublicID: "lx_7Q4XK2M9ab"},
+		Run: activity.Run{Runner: activity.Findings, State: activity.Submitted, Flow: &activity.FlowRef{Node: "review",
+			Hops: map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: {Node: "build", Name: "Build", Runner: activity.Code}}}}}
+	assert.Equal(t, "Next: Build waits for you on this machine: run `steermi run lx_7Q4XK2M9ab`.", describeNext(local, "x"))
+	local.Successor.LaunchPublicID = ""
+	assert.Equal(t, "Next: Build waits for you on this machine: its `steermi run` command is on the work item (x).", describeNext(local, "x"),
+		"the work item link only before the launch exists")
+}
+
+// A successor is "started" only while it is ready or running; a stopped
+// loop is worded before any successor, and other successor states leave
+// the wording to the pinned hop.
+func TestDescribeNextWordsTheSuccessorByState(t *testing.T) {
+	review := activity.FlowHop{Node: "review", Name: "Review", Runner: activity.Findings, Location: activity.Cloud}
+	view := func(s *runSuccessor, flow *activity.FlowRef) runView {
+		return runView{DisplayName: "Build", Successor: s, Run: activity.Run{Runner: activity.Code, State: activity.Submitted, Flow: flow}}
 	}
-	if got := describeNext(activity.Run{Runner: activity.Code, State: activity.Submitted}); got != nextStepHint {
-		t.Fatalf("no flow: %q", got)
+	plain := &activity.FlowRef{VersionID: "v", Node: "build", Hops: map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: review}}
+
+	// An exhausted loop creates its successor waiting with repair_limit:
+	// the stop decides, never "started".
+	exhausted := runView{DisplayName: "Review", Successor: &runSuccessor{ID: "r2", SkillName: "Build", State: activity.Waiting, ExecutionLocation: activity.Cloud, SessionID: "s2"},
+		Run: activity.Run{Runner: activity.Findings, State: activity.Submitted, Recommendation: activity.ChangesRequested, Flow: &activity.FlowRef{VersionID: "v", Node: "review",
+			Hops: map[activity.Outcome]activity.FlowHop{activity.OutcomeChangesRequested: {Node: "build", Name: "Build", Runner: activity.Code, Back: true, Location: activity.Cloud}},
+			Loop: &activity.LoopState{Key: "quality", LoopPolicy: activity.LoopPolicy{MaxIterations: 2}, Iteration: 2, Exhausted: activity.FlowHop{Approval: true}}}}}
+	_, stop, _ := exhausted.FlowNext()
+	require.Equal(t, activity.BlockerRepairLimit, stop)
+	assert.Equal(t, "Next: the quality loop stopped (repair limit); a person decides on the work item (x).", describeNext(exhausted, "x"))
+
+	suggested := view(&runSuccessor{ID: "r2", SkillName: "Review", State: activity.Suggested, ExecutionLocation: activity.Cloud}, plain)
+	assert.Equal(t, "Next: Review waits for a person to confirm it on the work item (x).", describeNext(suggested, "x"))
+
+	cancelled := view(&runSuccessor{ID: "r2", SkillName: "Review", State: activity.Cancelled, ExecutionLocation: activity.Cloud, SessionID: "s2"}, plain)
+	got := describeNext(cancelled, "x")
+	assert.NotContains(t, got, "started")
+	assert.Equal(t, "Next: Review — start it from the work item (x), in the cloud or on this machine.", got)
+
+	cloudWaiting := view(&runSuccessor{ID: "r2", SkillName: "Review", State: activity.Waiting, ExecutionLocation: activity.Cloud}, plain)
+	assert.NotContains(t, describeNext(cloudWaiting, "x"), "started")
+
+	running := view(&runSuccessor{ID: "r2", SkillName: "Review", State: activity.Running, ExecutionLocation: activity.Cloud}, plain)
+	assert.Equal(t, "Review started in Steermi: x", describeNext(running, "x"))
+
+	// A cancelled successor is never linked as the next step's session.
+	a := &Active{State: &config.LaunchState{Identifier: "STE-1"}, Client: api.New("https://steermi.test")}
+	cancelled.ProjectID = "p1"
+	assert.Equal(t, "https://steermi.test/work-items/key/STE-1", a.linkFor(cancelled))
+
+	// Without a pinned hop, a successor that has not started says nothing.
+	off := view(&runSuccessor{ID: "r2", SkillName: "Review", State: activity.Cancelled, ExecutionLocation: activity.Cloud}, nil)
+	assert.Equal(t, nextStepHint, describeNext(off, "x"))
+}
+
+// Every pause reason in the contract has its own wording.
+func TestPausedWordingCoversTheContract(t *testing.T) {
+	reasons := contractConsts(t, "AdvancePausedReason")
+	require.NotEmpty(t, reasons)
+	for _, r := range reasons {
+		_, ok := pausedReasons[activity.AdvancePausedReason(r)]
+		assert.True(t, ok, "no wording for %q", r)
 	}
+	assert.Len(t, pausedReasons, len(reasons), "a worded reason the contract no longer has")
+}
+
+// contractConsts lists the string values of the agent-contracts activity
+// constants of the named type, read from the module the build uses.
+func contractConsts(t *testing.T, typ string) []string {
+	t.Helper()
+	out, err := exec.Command("go", "list", "-m", "-f", "{{.Dir}}", "github.com/steermi/agent-contracts").Output()
+	require.NoError(t, err)
+	dir := filepath.Join(strings.TrimSpace(string(out)), "activity")
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, dir, func(fi fs.FileInfo) bool { return !strings.HasSuffix(fi.Name(), "_test.go") }, 0)
+	require.NoError(t, err)
+	var vals []string
+	for _, pkg := range pkgs {
+		for _, f := range pkg.Files {
+			for _, d := range f.Decls {
+				g, ok := d.(*ast.GenDecl)
+				if !ok || g.Tok != token.CONST {
+					continue
+				}
+				for _, spec := range g.Specs {
+					vs := spec.(*ast.ValueSpec)
+					if id, ok := vs.Type.(*ast.Ident); !ok || id.Name != typ {
+						continue
+					}
+					for _, v := range vs.Values {
+						if lit, ok := v.(*ast.BasicLit); ok && lit.Kind == token.STRING {
+							s, err := strconv.Unquote(lit.Value)
+							require.NoError(t, err)
+							vals = append(vals, s)
+						}
+					}
+				}
+			}
+		}
+	}
+	return vals
+}
+
+// --pause-after-step that the claim could not record says so.
+func TestStepModeRefusedIsReported(t *testing.T) {
+	o := RunOptions{PauseAfterStep: true}
+	assert.Contains(t, o.stepModeRefused(""), "--pause-after-step was not applied")
+	assert.Contains(t, o.stepModeRefused(activity.StepModeFlow), "--pause-after-step was not applied")
+	assert.Empty(t, o.stepModeRefused(activity.StepModeAsk))
+	assert.Empty(t, RunOptions{}.stepModeRefused(""), "no flag, nothing to report")
 }
