@@ -512,11 +512,13 @@ func TestDescribeNextWordsTheSuccessorByState(t *testing.T) {
 	plain := &activity.FlowRef{VersionID: "v", Node: "build", Hops: map[activity.Outcome]activity.FlowHop{activity.OutcomeDone: review}}
 
 	// An exhausted loop creates its successor waiting with repair_limit:
-	// the stop decides, never "started".
+	// the stop decides, never "started". The review needs a blocking finding:
+	// without one a loop review is approved (agent-contracts 0.4.0).
 	exhausted := runView{DisplayName: "Review", Successor: &runSuccessor{ID: "r2", SkillName: "Build", State: activity.Waiting, ExecutionLocation: activity.Cloud, SessionID: "s2"},
-		Run: activity.Run{Runner: activity.Findings, State: activity.Submitted, Recommendation: activity.ChangesRequested, Flow: &activity.FlowRef{VersionID: "v", Node: "review",
-			Hops: map[activity.Outcome]activity.FlowHop{activity.OutcomeChangesRequested: {Node: "build", Name: "Build", Runner: activity.Code, Back: true, Location: activity.Cloud}},
-			Loop: &activity.LoopState{Key: "quality", LoopPolicy: activity.LoopPolicy{MaxIterations: 2}, Iteration: 2, Exhausted: activity.FlowHop{Approval: true}}}}}
+		Run: activity.Run{Runner: activity.Findings, State: activity.Submitted, Recommendation: activity.ChangesRequested,
+			Findings: []activity.Finding{{ID: "f1", Severity: activity.High, Description: "still broken"}}, Flow: &activity.FlowRef{VersionID: "v", Node: "review",
+				Hops: map[activity.Outcome]activity.FlowHop{activity.OutcomeChangesRequested: {Node: "build", Name: "Build", Runner: activity.Code, Back: true, Location: activity.Cloud}},
+				Loop: &activity.LoopState{Key: "quality", LoopPolicy: activity.LoopPolicy{MaxIterations: 2}, Iteration: 2, Exhausted: activity.FlowHop{Approval: true}}}}}
 	_, stop, _ := exhausted.FlowNext()
 	require.Equal(t, activity.BlockerRepairLimit, stop)
 	assert.Equal(t, "Next: the quality loop stopped (repair limit); a person decides on the work item (x).", describeNext(exhausted, "x"))

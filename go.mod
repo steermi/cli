@@ -5,7 +5,7 @@ go 1.27.4
 require (
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v1.5.0
-	github.com/steermi/agent-contracts v0.3.1
+	github.com/steermi/agent-contracts v0.4.0
 	github.com/stretchr/testify v1.12.1
 	github.com/yuin/goldmark v1.8.7
 	golang.org/x/sys v0.50.0
