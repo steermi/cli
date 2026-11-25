@@ -36,9 +36,10 @@ All notable changes to the steermi CLI are listed here. The format follows
 ### Changed
 
 - Go 1.27.4 or newer is required.
-- Requires `github.com/steermi/agent-contracts` v0.4.0 (step modes, hop
+- Requires `github.com/steermi/agent-contracts` v0.5.0 (step modes, hop
   locations, `auto_paused_reason`, `review_inconclusive`, the new loop stall
-  rules and deciding approval nodes). Needs Steermi with the flow run UX
+  rules and deciding approval nodes; 0.5.0 limits docs page triggers to off
+  or ask, which the CLI does not use). Needs Steermi with the flow run UX
   release.
 - The launch claim always sends a JSON body (`{}` without
   `--pause-after-step`); Steermi requires it.
